@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useMemo } from "react"
-import { Copy, Check, Search, Terminal, Container, GitBranch, FileCode, Command, Keyboard, ChevronDown, TerminalSquare } from "lucide-react"
+import { useState, useMemo, useEffect } from "react"
+import { Copy, Check, Search, Terminal, Container, GitBranch, FileCode, Command, Keyboard, ChevronDown, TerminalSquare, Star } from "lucide-react"
 
 type Section = {
   id: string
@@ -9,6 +9,8 @@ type Section = {
   icon: typeof Terminal
   commands: { cmd: string; desc: string }[]
 }
+
+const FAVORITES_STORAGE_KEY = "terminal_cheatsheet_favorites"
 
 const basicsSections: Section[] = [
   {
@@ -171,15 +173,65 @@ export default function CheatSheet() {
   const [activeFilter, setActiveFilter] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
+  const [favorites, setFavorites] = useState<Set<string>>(new Set())
+  const [showOnlyFavorites, setShowOnlyFavorites] = useState(false)
+  const [isHydrated, setIsHydrated] = useState(false)
+
+  // Load favorites from localStorage on mount
+  useEffect(() => {
+    const stored = localStorage.getItem(FAVORITES_STORAGE_KEY)
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored)
+        setFavorites(new Set(parsed))
+      } catch {
+        // Invalid data, start fresh
+      }
+    }
+    setIsHydrated(true)
+  }, [])
+
+  // Save favorites to localStorage whenever they change
+  useEffect(() => {
+    if (isHydrated) {
+      localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify([...favorites]))
+    }
+  }, [favorites, isHydrated])
+
+  const toggleFavorite = (cmd: string) => {
+    setFavorites((prev) => {
+      const next = new Set(prev)
+      if (next.has(cmd)) {
+        next.delete(cmd)
+      } else {
+        next.add(cmd)
+      }
+      return next
+    })
+  }
 
   const allSections = [...basicsSections, ...advancedSections]
 
+  // Get all commands with their descriptions for favorites lookup
+  const allCommandsMap = useMemo(() => {
+    const map = new Map<string, { cmd: string; desc: string }>()
+    allSections.forEach((section) => {
+      section.commands.forEach((c) => {
+        map.set(c.cmd, c)
+      })
+    })
+    return map
+  }, [])
+
   const filterSection = (section: Section) => {
-    const commands = section.commands.filter(
+    let commands = section.commands.filter(
       (c) =>
         c.cmd.toLowerCase().includes(search.toLowerCase()) ||
         c.desc.toLowerCase().includes(search.toLowerCase())
     )
+    if (showOnlyFavorites) {
+      commands = commands.filter((c) => favorites.has(c.cmd))
+    }
     return { ...section, commands }
   }
 
@@ -188,14 +240,35 @@ export default function CheatSheet() {
       .filter((section) => !activeFilter || section.id === activeFilter || activeFilter.startsWith("adv-"))
       .map(filterSection)
       .filter((section) => section.commands.length > 0)
-  }, [search, activeFilter])
+  }, [search, activeFilter, favorites, showOnlyFavorites])
 
   const filteredAdvanced = useMemo(() => {
     return advancedSections
       .filter((section) => !activeFilter || section.id === activeFilter || !activeFilter.startsWith("adv-"))
       .map(filterSection)
       .filter((section) => section.commands.length > 0)
-  }, [search, activeFilter])
+  }, [search, activeFilter, favorites, showOnlyFavorites])
+
+  // Build favorites section from favorited commands
+  const favoritesSection = useMemo(() => {
+    const favoriteCommands = [...favorites]
+      .map((cmd) => allCommandsMap.get(cmd))
+      .filter((c): c is { cmd: string; desc: string } => c !== undefined)
+      .filter(
+        (c) =>
+          c.cmd.toLowerCase().includes(search.toLowerCase()) ||
+          c.desc.toLowerCase().includes(search.toLowerCase())
+      )
+
+    if (favoriteCommands.length === 0) return null
+
+    return {
+      id: "favorites",
+      title: "Favorites",
+      icon: Star,
+      commands: favoriteCommands,
+    }
+  }, [favorites, search, allCommandsMap])
 
   const hasSearchResults = (sectionId: string) => {
     if (!search) return true
@@ -233,8 +306,13 @@ export default function CheatSheet() {
   }
 
   const copyVisibleCommands = async () => {
-    const allCommands = [...filteredBasics, ...filteredAdvanced]
-      .flatMap((s) => s.commands.map((c) => c.cmd))
+    const allCommands = [
+      ...(favoritesSection && !showOnlyFavorites ? favoritesSection.commands : []),
+      ...filteredBasics.flatMap((s) => s.commands),
+      ...filteredAdvanced.flatMap((s) => s.commands),
+    ]
+      .map((c) => c.cmd)
+      .filter((cmd, index, self) => self.indexOf(cmd) === index) // dedupe
       .join("\n")
     await copyToClipboard(allCommands, "visible")
   }
@@ -244,7 +322,56 @@ export default function CheatSheet() {
     await copyToClipboard(commands, `${section.id}-all`)
   }
 
-  const renderSection = (section: Section & { commands: { cmd: string; desc: string }[] }) => {
+  const renderCommandRow = (
+    command: { cmd: string; desc: string },
+    idx: number,
+    sectionId: string,
+    showFavoriteStar: boolean = true
+  ) => {
+    const cmdId = `${sectionId}-${idx}`
+    const isCopied = copiedId === cmdId
+    const isFavorite = favorites.has(command.cmd)
+
+    return (
+      <div
+        key={idx}
+        className="group flex items-center justify-between gap-2 px-3 py-1.5 hover:bg-secondary/50"
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {showFavoriteStar && (
+            <button
+              onClick={() => toggleFavorite(command.cmd)}
+              className={`flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors ${
+                isFavorite
+                  ? "text-amber-500"
+                  : "text-muted-foreground/40 hover:text-muted-foreground"
+              }`}
+              title={isFavorite ? "Remove from favorites" : "Add to favorites"}
+            >
+              <Star className={`h-3 w-3 ${isFavorite ? "fill-current" : ""}`} />
+            </button>
+          )}
+          <code className="shrink-0 rounded bg-secondary px-2 py-0.5 font-mono text-xs text-foreground">
+            {command.cmd}
+          </code>
+          <span className="truncate text-xs text-muted-foreground">{command.desc}</span>
+        </div>
+        <button
+          onClick={() => copyToClipboard(command.cmd, cmdId)}
+          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors ${
+            isCopied
+              ? "bg-green-500/20 text-green-400"
+              : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+          }`}
+          title="Copy command"
+        >
+          {isCopied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+        </button>
+      </div>
+    )
+  }
+
+  const renderSection = (section: Section & { commands: { cmd: string; desc: string }[] }, showFavoriteStars: boolean = true) => {
     const Icon = section.icon
     const expanded = isExpanded(section.id)
 
@@ -261,7 +388,7 @@ export default function CheatSheet() {
                 expanded ? "" : "-rotate-90"
               }`}
             />
-            <Icon className="h-4 w-4 text-muted-foreground" />
+            <Icon className={`h-4 w-4 ${section.id === "favorites" ? "text-amber-500" : "text-muted-foreground"}`} />
             <h3 className="text-sm font-medium text-foreground">{section.title}</h3>
             <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
               {section.commands.length}
@@ -282,34 +409,9 @@ export default function CheatSheet() {
 
         {expanded && (
           <div className="divide-y divide-border border-t border-border">
-            {section.commands.map((command, idx) => {
-              const cmdId = `${section.id}-${idx}`
-              const isCopied = copiedId === cmdId
-              return (
-                <div
-                  key={idx}
-                  className="group flex items-center justify-between gap-3 px-3 py-1.5 hover:bg-secondary/50"
-                >
-                  <div className="flex min-w-0 flex-1 items-center gap-3">
-                    <code className="shrink-0 rounded bg-secondary px-2 py-0.5 font-mono text-xs text-foreground">
-                      {command.cmd}
-                    </code>
-                    <span className="truncate text-xs text-muted-foreground">{command.desc}</span>
-                  </div>
-                  <button
-                    onClick={() => copyToClipboard(command.cmd, cmdId)}
-                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors ${
-                      isCopied
-                        ? "bg-green-500/20 text-green-400"
-                        : "text-muted-foreground hover:bg-secondary hover:text-foreground"
-                    }`}
-                    title="Copy command"
-                  >
-                    {isCopied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                  </button>
-                </div>
-              )
-            })}
+            {section.commands.map((command, idx) =>
+              renderCommandRow(command, idx, section.id, showFavoriteStars)
+            )}
           </div>
         )}
       </section>
@@ -326,6 +428,11 @@ export default function CheatSheet() {
     { id: "nano", label: "Nano" },
     { id: "adv-powershell", label: "PowerShell" },
   ]
+
+  const hasNoResults =
+    filteredBasics.length === 0 &&
+    filteredAdvanced.length === 0 &&
+    (!favoritesSection || showOnlyFavorites)
 
   return (
     <div className="min-h-screen bg-background">
@@ -349,15 +456,31 @@ export default function CheatSheet() {
               </button>
             </div>
 
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <input
-                type="text"
-                placeholder="Search commands..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="w-full rounded-md border border-input bg-secondary/50 py-1.5 pl-8 pr-3 text-sm placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
-              />
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="text"
+                  placeholder="Search commands..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="w-full rounded-md border border-input bg-secondary/50 py-1.5 pl-8 pr-3 text-sm placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+              </div>
+              {isHydrated && favorites.size > 0 && (
+                <button
+                  onClick={() => setShowOnlyFavorites(!showOnlyFavorites)}
+                  className={`flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs font-medium transition-colors ${
+                    showOnlyFavorites
+                      ? "border-amber-500/50 bg-amber-500/10 text-amber-500"
+                      : "border-input bg-background text-muted-foreground hover:bg-secondary"
+                  }`}
+                  title={showOnlyFavorites ? "Show all commands" : "Show only favorites"}
+                >
+                  <Star className={`h-3 w-3 ${showOnlyFavorites ? "fill-current" : ""}`} />
+                  <span className="hidden sm:inline">Favorites only</span>
+                </button>
+              )}
             </div>
 
             <div className="flex flex-wrap gap-1.5">
@@ -380,6 +503,18 @@ export default function CheatSheet() {
       </header>
 
       <main className="mx-auto max-w-5xl px-4 py-4">
+        {/* Favorites Section - only show if favorites exist and not in "favorites only" mode */}
+        {isHydrated && favoritesSection && !showOnlyFavorites && (
+          <div className="mb-6">
+            <div className="mb-2 flex items-center gap-2">
+              <span className="rounded bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-500">
+                Favorites
+              </span>
+            </div>
+            <div className="space-y-2">{renderSection(favoritesSection, false)}</div>
+          </div>
+        )}
+
         {filteredBasics.length > 0 && (
           <div className="mb-6">
             <div className="mb-2 flex items-center gap-2">
@@ -387,7 +522,7 @@ export default function CheatSheet() {
                 Basics
               </span>
             </div>
-            <div className="space-y-2">{filteredBasics.map(renderSection)}</div>
+            <div className="space-y-2">{filteredBasics.map((s) => renderSection(s))}</div>
           </div>
         )}
 
@@ -398,14 +533,16 @@ export default function CheatSheet() {
                 Advanced
               </span>
             </div>
-            <div className="space-y-2">{filteredAdvanced.map(renderSection)}</div>
+            <div className="space-y-2">{filteredAdvanced.map((s) => renderSection(s))}</div>
           </div>
         )}
 
-        {filteredBasics.length === 0 && filteredAdvanced.length === 0 && (
+        {hasNoResults && (
           <div className="py-12 text-center">
             <p className="text-sm text-muted-foreground">
-              No commands found matching &quot;{search}&quot;
+              {showOnlyFavorites && favorites.size === 0
+                ? "No favorites yet. Click the star icon on any command to add it."
+                : `No commands found matching "${search}"`}
             </p>
           </div>
         )}
