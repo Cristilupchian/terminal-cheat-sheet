@@ -2,7 +2,6 @@
 
 import { useState, useMemo } from "react"
 import { Copy, Check, Search, Terminal, Container, GitBranch, FileCode, Command, Keyboard, ChevronDown, TerminalSquare } from "lucide-react"
-import { Button } from "@/components/ui/button"
 
 type Section = {
   id: string
@@ -251,12 +250,12 @@ export default function CheatSheet() {
 
     return (
       <section key={section.id} className="rounded-lg border border-border bg-card">
-        <button
-          onClick={() => toggleSection(section.id)}
-          className="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-secondary/30"
-          disabled={!!search}
-        >
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between px-3 py-2">
+          <button
+            onClick={() => toggleSection(section.id)}
+            className="flex flex-1 items-center gap-2 text-left hover:opacity-80"
+            disabled={!!search}
+          >
             <ChevronDown
               className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${
                 expanded ? "" : "-rotate-90"
@@ -267,15 +266,10 @@ export default function CheatSheet() {
             <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
               {section.commands.length}
             </span>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={(e) => {
-              e.stopPropagation()
-              copySectionCommands(section)
-            }}
-            className="h-6 gap-1 px-2 text-[10px]"
+          </button>
+          <button
+            onClick={() => copySectionCommands(section)}
+            className="flex h-6 items-center gap-1 rounded px-2 text-[10px] text-muted-foreground hover:bg-secondary hover:text-foreground"
           >
             {copiedId === `${section.id}-all` ? (
               <Check className="h-3 w-3" />
@@ -283,8 +277,8 @@ export default function CheatSheet() {
               <Copy className="h-3 w-3" />
             )}
             Copy all
-          </Button>
-        </button>
+          </button>
+        </div>
 
         {expanded && (
           <div className="divide-y divide-border border-t border-border">
@@ -346,15 +340,13 @@ export default function CheatSheet() {
                   Built for daily use, not theory
                 </p>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
+              <button
                 onClick={copyVisibleCommands}
-                className="h-7 gap-1.5 text-xs"
+                className="flex h-7 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-xs font-medium hover:bg-secondary"
               >
                 {copiedId === "visible" ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                 Copy Visible
-              </Button>
+              </button>
             </div>
 
             <div className="relative">
