@@ -1,13 +1,20 @@
 "use client"
 
 import { useState, useMemo } from "react"
-import { Copy, Check, Search, Terminal, Container, GitBranch, FileCode, Command, Keyboard } from "lucide-react"
+import { Copy, Check, Search, Terminal, Container, GitBranch, FileCode, Command, Keyboard, ChevronDown, TerminalSquare } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
-const sections = [
+type Section = {
+  id: string
+  title: string
+  icon: typeof Terminal
+  commands: { cmd: string; desc: string }[]
+}
+
+const basicsSections: Section[] = [
   {
     id: "wsl",
-    title: "WSL / Terminal Basics",
+    title: "WSL / Terminal",
     icon: Terminal,
     commands: [
       { cmd: "cd /mnt/c/dev", desc: "Go to dev folder" },
@@ -92,24 +99,133 @@ const sections = [
   },
 ]
 
+const advancedSections: Section[] = [
+  {
+    id: "adv-wsl",
+    title: "WSL / Terminal",
+    icon: Terminal,
+    commands: [
+      { cmd: "history", desc: "Show command history" },
+      { cmd: 'grep -R "text" .', desc: "Search text recursively" },
+      { cmd: 'find . -name "*.php"', desc: "Find PHP files" },
+      { cmd: "chmod +x file.sh", desc: "Make executable" },
+    ],
+  },
+  {
+    id: "adv-docker",
+    title: "Docker Commands",
+    icon: Container,
+    commands: [
+      { cmd: "docker compose build", desc: "Rebuild containers" },
+      { cmd: "docker compose logs -f service_name", desc: "Logs for one service" },
+      { cmd: "docker exec -it wp_local_db mysql -u root -p", desc: "Enter MySQL" },
+    ],
+  },
+  {
+    id: "adv-wpcli",
+    title: "WP-CLI via Docker",
+    icon: FileCode,
+    commands: [
+      { cmd: "docker compose run --rm wpcli wp cache flush", desc: "Flush cache" },
+      { cmd: "docker compose run --rm wpcli wp user list", desc: "List users" },
+      { cmd: "docker compose run --rm wpcli wp post list", desc: "List posts" },
+    ],
+  },
+  {
+    id: "adv-git",
+    title: "Git Core Commands",
+    icon: GitBranch,
+    commands: [
+      { cmd: "git checkout -", desc: "Switch to previous branch" },
+      { cmd: "git branch", desc: "List branches" },
+      { cmd: "git branch -d branch-name", desc: "Delete local branch" },
+      { cmd: "git reset --soft HEAD~1", desc: "Undo last commit but keep changes" },
+      { cmd: "git stash", desc: "Temporarily save changes" },
+      { cmd: "git stash pop", desc: "Restore stashed changes" },
+    ],
+  },
+  {
+    id: "adv-aliases",
+    title: "WSL Aliases",
+    icon: Command,
+    commands: [
+      { cmd: 'alias gs="git status"', desc: "Git shortcut" },
+      { cmd: 'alias gl="git log --oneline"', desc: "Git log shortcut" },
+      { cmd: 'alias ..="cd .."', desc: "Go up one folder" },
+    ],
+  },
+  {
+    id: "adv-powershell",
+    title: "PowerShell",
+    icon: TerminalSquare,
+    commands: [
+      { cmd: "Get-ChildItem", desc: "List files" },
+      { cmd: "Get-Location", desc: "Show path" },
+      { cmd: "Set-Location C:\\dev", desc: "Change folder" },
+      { cmd: "Remove-Item file.txt", desc: "Delete file" },
+    ],
+  },
+]
+
 export default function CheatSheet() {
   const [search, setSearch] = useState("")
   const [activeFilter, setActiveFilter] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
 
-  const filteredSections = useMemo(() => {
-    return sections
-      .filter((section) => !activeFilter || section.id === activeFilter)
-      .map((section) => ({
-        ...section,
-        commands: section.commands.filter(
-          (c) =>
-            c.cmd.toLowerCase().includes(search.toLowerCase()) ||
-            c.desc.toLowerCase().includes(search.toLowerCase())
-        ),
-      }))
+  const allSections = [...basicsSections, ...advancedSections]
+
+  const filterSection = (section: Section) => {
+    const commands = section.commands.filter(
+      (c) =>
+        c.cmd.toLowerCase().includes(search.toLowerCase()) ||
+        c.desc.toLowerCase().includes(search.toLowerCase())
+    )
+    return { ...section, commands }
+  }
+
+  const filteredBasics = useMemo(() => {
+    return basicsSections
+      .filter((section) => !activeFilter || section.id === activeFilter || activeFilter.startsWith("adv-"))
+      .map(filterSection)
       .filter((section) => section.commands.length > 0)
   }, [search, activeFilter])
+
+  const filteredAdvanced = useMemo(() => {
+    return advancedSections
+      .filter((section) => !activeFilter || section.id === activeFilter || !activeFilter.startsWith("adv-"))
+      .map(filterSection)
+      .filter((section) => section.commands.length > 0)
+  }, [search, activeFilter])
+
+  const hasSearchResults = (sectionId: string) => {
+    if (!search) return true
+    const section = allSections.find((s) => s.id === sectionId)
+    if (!section) return false
+    return section.commands.some(
+      (c) =>
+        c.cmd.toLowerCase().includes(search.toLowerCase()) ||
+        c.desc.toLowerCase().includes(search.toLowerCase())
+    )
+  }
+
+  const isExpanded = (sectionId: string) => {
+    if (search && hasSearchResults(sectionId)) return true
+    return !collapsedSections.has(sectionId)
+  }
+
+  const toggleSection = (sectionId: string) => {
+    if (search) return
+    setCollapsedSections((prev) => {
+      const next = new Set(prev)
+      if (next.has(sectionId)) {
+        next.delete(sectionId)
+      } else {
+        next.add(sectionId)
+      }
+      return next
+    })
+  }
 
   const copyToClipboard = async (text: string, id: string) => {
     await navigator.clipboard.writeText(text)
@@ -117,46 +233,130 @@ export default function CheatSheet() {
     setTimeout(() => setCopiedId(null), 1500)
   }
 
-  const copyAllCommands = async () => {
-    const allCommands = filteredSections
+  const copyVisibleCommands = async () => {
+    const allCommands = [...filteredBasics, ...filteredAdvanced]
       .flatMap((s) => s.commands.map((c) => c.cmd))
       .join("\n")
-    await copyToClipboard(allCommands, "all")
+    await copyToClipboard(allCommands, "visible")
   }
 
-  const copyAllAliases = async () => {
-    const aliasSection = sections.find((s) => s.id === "aliases")
-    if (aliasSection) {
-      const aliases = aliasSection.commands.map((c) => c.cmd).join("\n")
-      await copyToClipboard(aliases, "aliases-all")
-    }
+  const copySectionCommands = async (section: Section) => {
+    const commands = section.commands.map((c) => c.cmd).join("\n")
+    await copyToClipboard(commands, `${section.id}-all`)
   }
+
+  const renderSection = (section: Section & { commands: { cmd: string; desc: string }[] }) => {
+    const Icon = section.icon
+    const expanded = isExpanded(section.id)
+
+    return (
+      <section key={section.id} className="rounded-lg border border-border bg-card">
+        <button
+          onClick={() => toggleSection(section.id)}
+          className="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-secondary/30"
+          disabled={!!search}
+        >
+          <div className="flex items-center gap-2">
+            <ChevronDown
+              className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${
+                expanded ? "" : "-rotate-90"
+              }`}
+            />
+            <Icon className="h-4 w-4 text-muted-foreground" />
+            <h3 className="text-sm font-medium text-foreground">{section.title}</h3>
+            <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              {section.commands.length}
+            </span>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={(e) => {
+              e.stopPropagation()
+              copySectionCommands(section)
+            }}
+            className="h-6 gap-1 px-2 text-[10px]"
+          >
+            {copiedId === `${section.id}-all` ? (
+              <Check className="h-3 w-3" />
+            ) : (
+              <Copy className="h-3 w-3" />
+            )}
+            Copy all
+          </Button>
+        </button>
+
+        {expanded && (
+          <div className="divide-y divide-border border-t border-border">
+            {section.commands.map((command, idx) => {
+              const cmdId = `${section.id}-${idx}`
+              const isCopied = copiedId === cmdId
+              return (
+                <div
+                  key={idx}
+                  className="group flex items-center justify-between gap-3 px-3 py-1.5 hover:bg-secondary/50"
+                >
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
+                    <code className="shrink-0 rounded bg-secondary px-2 py-0.5 font-mono text-xs text-foreground">
+                      {command.cmd}
+                    </code>
+                    <span className="truncate text-xs text-muted-foreground">{command.desc}</span>
+                  </div>
+                  <button
+                    onClick={() => copyToClipboard(command.cmd, cmdId)}
+                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors ${
+                      isCopied
+                        ? "bg-green-500/20 text-green-400"
+                        : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+                    }`}
+                    title="Copy command"
+                  >
+                    {isCopied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </section>
+    )
+  }
+
+  const filterCategories = [
+    { id: null, label: "All" },
+    { id: "wsl", label: "WSL" },
+    { id: "docker", label: "Docker" },
+    { id: "wpcli", label: "WP-CLI" },
+    { id: "git", label: "Git" },
+    { id: "aliases", label: "Aliases" },
+    { id: "nano", label: "Nano" },
+    { id: "adv-powershell", label: "PowerShell" },
+  ]
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Sticky Header */}
       <header className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="mx-auto max-w-5xl px-4 py-3">
           <div className="flex flex-col gap-3">
-            {/* Title Row */}
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-lg font-semibold text-foreground">Terminal Cheat Sheet</h1>
                 <p className="text-xs text-muted-foreground">WSL, Docker, WP-CLI, Git, Aliases</p>
-                <p className="mt-0.5 text-[10px] text-muted-foreground/70 italic">Built for daily use, not theory</p>
+                <p className="mt-0.5 text-[10px] italic text-muted-foreground/70">
+                  Built for daily use, not theory
+                </p>
               </div>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={copyAllCommands}
+                onClick={copyVisibleCommands}
                 className="h-7 gap-1.5 text-xs"
               >
-                {copiedId === "all" ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                Copy All
+                {copiedId === "visible" ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                Copy Visible
               </Button>
             </div>
 
-            {/* Search */}
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <input
@@ -168,29 +368,18 @@ export default function CheatSheet() {
               />
             </div>
 
-            {/* Filter Pills */}
             <div className="flex flex-wrap gap-1.5">
-              <button
-                onClick={() => setActiveFilter(null)}
-                className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
-                  !activeFilter
-                    ? "bg-foreground text-background"
-                    : "bg-secondary text-muted-foreground hover:bg-secondary/80"
-                }`}
-              >
-                All
-              </button>
-              {sections.map((section) => (
+              {filterCategories.map((cat) => (
                 <button
-                  key={section.id}
-                  onClick={() => setActiveFilter(activeFilter === section.id ? null : section.id)}
+                  key={cat.id ?? "all"}
+                  onClick={() => setActiveFilter(cat.id)}
                   className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
-                    activeFilter === section.id
+                    activeFilter === cat.id
                       ? "bg-foreground text-background"
                       : "bg-secondary text-muted-foreground hover:bg-secondary/80"
                   }`}
                 >
-                  {section.title}
+                  {cat.label}
                 </button>
               ))}
             </div>
@@ -198,82 +387,36 @@ export default function CheatSheet() {
         </div>
       </header>
 
-      {/* Content */}
       <main className="mx-auto max-w-5xl px-4 py-4">
-        <div className="space-y-4">
-          {filteredSections.map((section) => {
-            const Icon = section.icon
-            return (
-              <section key={section.id} className="rounded-lg border border-border bg-card">
-                {/* Section Header */}
-                <div className="flex items-center justify-between border-b border-border px-3 py-2">
-                  <div className="flex items-center gap-2">
-                    <Icon className="h-4 w-4 text-muted-foreground" />
-                    <h2 className="text-sm font-medium text-foreground">{section.title}</h2>
-                    <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                      {section.commands.length}
-                    </span>
-                  </div>
-                  {section.id === "aliases" && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={copyAllAliases}
-                      className="h-6 gap-1 px-2 text-[10px]"
-                    >
-                      {copiedId === "aliases-all" ? (
-                        <Check className="h-3 w-3" />
-                      ) : (
-                        <Copy className="h-3 w-3" />
-                      )}
-                      Copy all aliases
-                    </Button>
-                  )}
-                </div>
-
-                {/* Commands */}
-                <div className="divide-y divide-border">
-                  {section.commands.map((command, idx) => {
-                    const cmdId = `${section.id}-${idx}`
-                    const isCopied = copiedId === cmdId
-                    return (
-                      <div
-                        key={idx}
-                        className="group flex items-center justify-between gap-3 px-3 py-1.5 hover:bg-secondary/50"
-                      >
-                        <div className="flex min-w-0 flex-1 items-center gap-3">
-                          <code className="shrink-0 rounded bg-secondary px-2 py-0.5 font-mono text-xs text-foreground">
-                            {command.cmd}
-                          </code>
-                          <span className="truncate text-xs text-muted-foreground">
-                            {command.desc}
-                          </span>
-                        </div>
-                        <button
-                          onClick={() => copyToClipboard(command.cmd, cmdId)}
-                          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors ${
-                            isCopied
-                              ? "bg-green-500/20 text-green-400"
-                              : "text-muted-foreground hover:bg-secondary hover:text-foreground"
-                          }`}
-                          title="Copy command"
-                        >
-                          {isCopied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                        </button>
-                      </div>
-                    )
-                  })}
-                </div>
-              </section>
-            )
-          })}
-
-          {filteredSections.length === 0 && (
-            <div className="py-12 text-center">
-              <p className="text-sm text-muted-foreground">No commands found matching &quot;{search}&quot;</p>
+        {filteredBasics.length > 0 && (
+          <div className="mb-6">
+            <div className="mb-2 flex items-center gap-2">
+              <span className="rounded bg-secondary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Basics
+              </span>
             </div>
-          )}
-        </div>
+            <div className="space-y-2">{filteredBasics.map(renderSection)}</div>
+          </div>
+        )}
+
+        {filteredAdvanced.length > 0 && (
+          <div>
+            <div className="mb-2 flex items-center gap-2">
+              <span className="rounded bg-secondary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Advanced
+              </span>
+            </div>
+            <div className="space-y-2">{filteredAdvanced.map(renderSection)}</div>
+          </div>
+        )}
+
+        {filteredBasics.length === 0 && filteredAdvanced.length === 0 && (
+          <div className="py-12 text-center">
+            <p className="text-sm text-muted-foreground">
+              No commands found matching &quot;{search}&quot;
+            </p>
+          </div>
+        )}
       </main>
     </div>
   )
