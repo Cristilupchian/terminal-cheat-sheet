@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-
 set -euo pipefail
 
-REMOTE_USER="cristilupchian"
-REMOTE_HOST="s1058.use1.mysecurecloudhost.com"
-REMOTE_PATH="~/terminal.cristilupchian.me/"
+REMOTE_USER="${REMOTE_USER:?Set REMOTE_USER}"
+REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST}"
+REMOTE_PATH="${REMOTE_PATH:?Set REMOTE_PATH}"
 
 echo "Building project..."
 npm run build
