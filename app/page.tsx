@@ -1,16 +1,96 @@
 "use client"
 
-import { useState, useMemo, useEffect } from "react"
-import { Copy, Check, Search, Terminal, Container, GitBranch, FileCode, Command, Keyboard, ChevronDown, TerminalSquare, Star } from "lucide-react"
+import { useState, useMemo, useEffect, useRef, type ChangeEvent } from "react"
+import {
+  Copy,
+  Check,
+  Search,
+  Terminal,
+  Container,
+  GitBranch,
+  FileCode,
+  Command,
+  Keyboard,
+  ChevronDown,
+  TerminalSquare,
+  Star,
+  Plus,
+  Download,
+  Upload,
+  Trash2,
+} from "lucide-react"
+
+type CommandRow = {
+  cmd: string
+  desc: string
+  customId?: string
+}
 
 type Section = {
   id: string
   title: string
   icon: typeof Terminal
-  commands: { cmd: string; desc: string }[]
+  commands: CommandRow[]
+}
+
+type CustomStoredEntry = {
+  id: string
+  sectionLabel: string
+  cmd: string
+  desc: string
+  createdAt: number
+  updatedAt: number
+}
+
+type CustomStoragePayload = {
+  v: 1
+  items: CustomStoredEntry[]
 }
 
 const FAVORITES_STORAGE_KEY = "terminal_cheatsheet_favorites"
+const CUSTOM_STORAGE_KEY = "terminal_cheatsheet_custom_commands_v1"
+
+function sectionMatchesFilter(filterId: string | null, sectionId: string): boolean {
+  if (filterId === null) return true
+  const byCategory: Record<string, string[]> = {
+    wsl: ["wsl", "adv-wsl"],
+    docker: ["docker", "adv-docker"],
+    wpcli: ["wpcli", "adv-wpcli"],
+    git: ["git", "adv-git"],
+    aliases: ["aliases", "adv-aliases"],
+    nano: ["nano"],
+    "adv-powershell": ["adv-powershell"],
+  }
+  return byCategory[filterId]?.includes(sectionId) ?? false
+}
+
+function parseCustomStorage(raw: string | null): CustomStoredEntry[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as CustomStoragePayload | CustomStoredEntry[]
+    if (Array.isArray(parsed)) {
+      return parsed.filter(
+        (e): e is CustomStoredEntry =>
+          typeof e?.id === "string" &&
+          typeof e?.sectionLabel === "string" &&
+          typeof e?.cmd === "string" &&
+          typeof e?.desc === "string"
+      )
+    }
+    if (parsed && parsed.v === 1 && Array.isArray(parsed.items)) {
+      return parsed.items.filter(
+        (e): e is CustomStoredEntry =>
+          typeof e?.id === "string" &&
+          typeof e?.sectionLabel === "string" &&
+          typeof e?.cmd === "string" &&
+          typeof e?.desc === "string"
+      )
+    }
+  } catch {
+    // ignore
+  }
+  return []
+}
 
 const basicsSections: Section[] = [
   {
@@ -176,8 +256,14 @@ export default function CheatSheet() {
   const [favorites, setFavorites] = useState<Set<string>>(new Set())
   const [showOnlyFavorites, setShowOnlyFavorites] = useState(false)
   const [isHydrated, setIsHydrated] = useState(false)
+  const [customItems, setCustomItems] = useState<CustomStoredEntry[]>([])
+  const [formSectionLabel, setFormSectionLabel] = useState("")
+  const [formCmd, setFormCmd] = useState("")
+  const [formDesc, setFormDesc] = useState("")
+  const [formError, setFormError] = useState<string | null>(null)
+  const importInputRef = useRef<HTMLInputElement>(null)
 
-  // Load favorites from localStorage on mount
+  // Load favorites + custom commands from localStorage on mount
   useEffect(() => {
     const stored = localStorage.getItem(FAVORITES_STORAGE_KEY)
     if (stored) {
@@ -188,6 +274,8 @@ export default function CheatSheet() {
         // Invalid data, start fresh
       }
     }
+    const customRaw = localStorage.getItem(CUSTOM_STORAGE_KEY)
+    setCustomItems(parseCustomStorage(customRaw))
     setIsHydrated(true)
   }, [])
 
@@ -197,6 +285,13 @@ export default function CheatSheet() {
       localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify([...favorites]))
     }
   }, [favorites, isHydrated])
+
+  useEffect(() => {
+    if (isHydrated) {
+      const payload: CustomStoragePayload = { v: 1, items: customItems }
+      localStorage.setItem(CUSTOM_STORAGE_KEY, JSON.stringify(payload))
+    }
+  }, [customItems, isHydrated])
 
   const toggleFavorite = (cmd: string) => {
     setFavorites((prev) => {
@@ -210,18 +305,58 @@ export default function CheatSheet() {
     })
   }
 
-  const allSections = [...basicsSections, ...advancedSections]
+  const customSectionsUngrouped = useMemo((): Section[] => {
+    const byLabel = new Map<string, CustomStoredEntry[]>()
+    for (const item of customItems) {
+      const label = item.sectionLabel.trim() || "My commands"
+      const list = byLabel.get(label) ?? []
+      list.push(item)
+      byLabel.set(label, list)
+    }
+    const out: Section[] = []
+    for (const [label, items] of byLabel) {
+      const id = `custom:${encodeURIComponent(label)}`
+      out.push({
+        id,
+        title: label,
+        icon: Command,
+        commands: items.map((e) => ({
+          cmd: e.cmd,
+          desc: e.desc,
+          customId: e.id,
+        })),
+      })
+    }
+    return out.sort((a, b) => a.title.localeCompare(b.title))
+  }, [customItems])
 
-  // Get all commands with their descriptions for favorites lookup
+  const allSections = useMemo(
+    () => [...basicsSections, ...advancedSections, ...customSectionsUngrouped],
+    [customSectionsUngrouped]
+  )
+
+  // Get all commands with their descriptions for favorites lookup (built-in first, then custom overrides desc)
   const allCommandsMap = useMemo(() => {
-    const map = new Map<string, { cmd: string; desc: string }>()
+    const map = new Map<string, CommandRow>()
     allSections.forEach((section) => {
       section.commands.forEach((c) => {
-        map.set(c.cmd, c)
+        map.set(c.cmd, { cmd: c.cmd, desc: c.desc })
       })
     })
     return map
-  }, [])
+  }, [allSections])
+
+  const visibleCmdsUnderFilter = useMemo(() => {
+    if (activeFilter === null) return null
+    const set = new Set<string>()
+    basicsSections
+      .filter((s) => sectionMatchesFilter(activeFilter, s.id))
+      .forEach((s) => s.commands.forEach((c) => set.add(c.cmd)))
+    advancedSections
+      .filter((s) => sectionMatchesFilter(activeFilter, s.id))
+      .forEach((s) => s.commands.forEach((c) => set.add(c.cmd)))
+    return set
+  }, [activeFilter])
 
   const filterSection = (section: Section) => {
     let commands = section.commands.filter(
@@ -237,28 +372,37 @@ export default function CheatSheet() {
 
   const filteredBasics = useMemo(() => {
     return basicsSections
-      .filter((section) => !activeFilter || section.id === activeFilter || activeFilter.startsWith("adv-"))
+      .filter((section) => sectionMatchesFilter(activeFilter, section.id))
       .map(filterSection)
       .filter((section) => section.commands.length > 0)
   }, [search, activeFilter, favorites, showOnlyFavorites])
 
   const filteredAdvanced = useMemo(() => {
     return advancedSections
-      .filter((section) => !activeFilter || section.id === activeFilter || !activeFilter.startsWith("adv-"))
+      .filter((section) => sectionMatchesFilter(activeFilter, section.id))
       .map(filterSection)
       .filter((section) => section.commands.length > 0)
   }, [search, activeFilter, favorites, showOnlyFavorites])
+
+  const filteredCustom = useMemo(() => {
+    if (activeFilter !== null) return []
+    return customSectionsUngrouped.map(filterSection).filter((s) => s.commands.length > 0)
+  }, [customSectionsUngrouped, search, activeFilter, favorites, showOnlyFavorites])
 
   // Build favorites section from favorited commands
   const favoritesSection = useMemo(() => {
     const favoriteCommands = [...favorites]
       .map((cmd) => allCommandsMap.get(cmd))
-      .filter((c): c is { cmd: string; desc: string } => c !== undefined)
+      .filter((c): c is CommandRow => c !== undefined)
       .filter(
         (c) =>
           c.cmd.toLowerCase().includes(search.toLowerCase()) ||
           c.desc.toLowerCase().includes(search.toLowerCase())
       )
+      .filter((c) => {
+        if (visibleCmdsUnderFilter === null) return true
+        return visibleCmdsUnderFilter.has(c.cmd)
+      })
 
     if (favoriteCommands.length === 0) return null
 
@@ -268,7 +412,7 @@ export default function CheatSheet() {
       icon: Star,
       commands: favoriteCommands,
     }
-  }, [favorites, search, allCommandsMap])
+  }, [favorites, search, allCommandsMap, visibleCmdsUnderFilter])
 
   const hasSearchResults = (sectionId: string) => {
     if (!search) return true
@@ -310,6 +454,7 @@ export default function CheatSheet() {
       ...(favoritesSection && !showOnlyFavorites ? favoritesSection.commands : []),
       ...filteredBasics.flatMap((s) => s.commands),
       ...filteredAdvanced.flatMap((s) => s.commands),
+      ...filteredCustom.flatMap((s) => s.commands),
     ]
       .map((c) => c.cmd)
       .filter((cmd, index, self) => self.indexOf(cmd) === index) // dedupe
@@ -322,19 +467,87 @@ export default function CheatSheet() {
     await copyToClipboard(commands, `${section.id}-all`)
   }
 
+  const deleteCustomEntry = (id: string) => {
+    setCustomItems((prev) => prev.filter((e) => e.id !== id))
+  }
+
+  const addCustomEntry = () => {
+    const sectionLabel = formSectionLabel.trim()
+    const cmd = formCmd.trim()
+    const desc = formDesc.trim()
+    if (!sectionLabel || !cmd || !desc) {
+      setFormError("Section label, command, and description are required.")
+      return
+    }
+    setFormError(null)
+    const now = Date.now()
+    const id =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${now}-${Math.random().toString(36).slice(2)}`
+    setCustomItems((prev) => [
+      ...prev,
+      { id, sectionLabel, cmd, desc, createdAt: now, updatedAt: now },
+    ])
+    setFormCmd("")
+    setFormDesc("")
+  }
+
+  const exportCustomTxt = () => {
+    const payload: CustomStoragePayload = { v: 1, items: customItems }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "text/plain;charset=utf-8",
+    })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `terminal-cheat-sheet-custom-${new Date().toISOString().slice(0, 10)}.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const onImportCustomFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ""
+    if (!file) return
+    try {
+      const text = await file.text()
+      const parsed = JSON.parse(text) as unknown
+      let incoming: CustomStoredEntry[] = []
+      if (Array.isArray(parsed)) {
+        incoming = parseCustomStorage(JSON.stringify(parsed))
+      } else if (parsed && typeof parsed === "object" && "items" in parsed) {
+        incoming = parseCustomStorage(JSON.stringify(parsed))
+      }
+      if (incoming.length === 0) {
+        setFormError("Import file had no valid custom commands.")
+        return
+      }
+      setFormError(null)
+      setCustomItems((prev) => {
+        const existingIds = new Set(prev.map((i) => i.id))
+        const merged = incoming.filter((i) => !existingIds.has(i.id))
+        return [...prev, ...merged]
+      })
+    } catch {
+      setFormError("Could not read import file. Use a TXT exported from this app.")
+    }
+  }
+
   const renderCommandRow = (
-    command: { cmd: string; desc: string },
+    command: CommandRow,
     idx: number,
     sectionId: string,
     showFavoriteStar: boolean = true
   ) => {
+    const rowKey = command.customId ?? `${sectionId}-${idx}`
     const cmdId = `${sectionId}-${idx}`
     const isCopied = copiedId === cmdId
     const isFavorite = favorites.has(command.cmd)
 
     return (
       <div
-        key={idx}
+        key={rowKey}
         className="group flex items-center justify-between gap-2 px-3 py-1.5 hover:bg-secondary/50"
       >
         <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -356,22 +569,34 @@ export default function CheatSheet() {
           </code>
           <span className="truncate text-xs text-muted-foreground">{command.desc}</span>
         </div>
-        <button
-          onClick={() => copyToClipboard(command.cmd, cmdId)}
-          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors ${
-            isCopied
-              ? "bg-green-500/20 text-green-400"
-              : "text-muted-foreground hover:bg-secondary hover:text-foreground"
-          }`}
-          title="Copy command"
-        >
-          {isCopied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          {command.customId && (
+            <button
+              type="button"
+              onClick={() => deleteCustomEntry(command.customId!)}
+              className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-destructive/15 hover:text-destructive"
+              title="Remove custom command"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          )}
+          <button
+            onClick={() => copyToClipboard(command.cmd, cmdId)}
+            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors ${
+              isCopied
+                ? "bg-green-500/20 text-green-400"
+                : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+            }`}
+            title="Copy command"
+          >
+            {isCopied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+          </button>
+        </div>
       </div>
     )
   }
 
-  const renderSection = (section: Section & { commands: { cmd: string; desc: string }[] }, showFavoriteStars: boolean = true) => {
+  const renderSection = (section: Section & { commands: CommandRow[] }, showFavoriteStars: boolean = true) => {
     const Icon = section.icon
     const expanded = isExpanded(section.id)
 
@@ -432,6 +657,7 @@ export default function CheatSheet() {
   const hasNoResults =
     filteredBasics.length === 0 &&
     filteredAdvanced.length === 0 &&
+    filteredCustom.length === 0 &&
     (!favoritesSection || showOnlyFavorites)
 
   return (
@@ -503,6 +729,101 @@ export default function CheatSheet() {
       </header>
 
       <main className="mx-auto max-w-5xl px-4 py-4">
+        {isHydrated && (
+          <div className="mb-6 rounded-lg border border-border bg-card p-4">
+            <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-sm font-semibold text-foreground">Your commands</h2>
+                <p className="text-[11px] text-muted-foreground">
+                  Saved in this browser only. Export a TXT file to copy to another machine.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={exportCustomTxt}
+                  disabled={customItems.length === 0}
+                  className="flex h-8 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-xs font-medium hover:bg-secondary disabled:pointer-events-none disabled:opacity-50"
+                >
+                  <Download className="h-3 w-3" />
+                  Export TXT
+                </button>
+                <button
+                  type="button"
+                  onClick={() => importInputRef.current?.click()}
+                  className="flex h-8 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-xs font-medium hover:bg-secondary"
+                >
+                  <Upload className="h-3 w-3" />
+                  Import TXT
+                </button>
+                <input
+                  ref={importInputRef}
+                  type="file"
+                  accept=".txt,text/plain,application/json"
+                  className="hidden"
+                  onChange={onImportCustomFile}
+                />
+              </div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <div className="sm:col-span-1">
+                <label className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Section label
+                </label>
+                <input
+                  type="text"
+                  value={formSectionLabel}
+                  onChange={(e) => setFormSectionLabel(e.target.value)}
+                  placeholder="e.g. Cristi Aliases"
+                  className="w-full rounded-md border border-input bg-secondary/50 px-2 py-1.5 text-sm placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+              </div>
+              <div className="sm:col-span-1">
+                <label className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Command
+                </label>
+                <input
+                  type="text"
+                  value={formCmd}
+                  onChange={(e) => setFormCmd(e.target.value)}
+                  placeholder="alias ll='ls -la'"
+                  className="w-full rounded-md border border-input bg-secondary/50 px-2 py-1.5 font-mono text-sm placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+              </div>
+              <div className="sm:col-span-1">
+                <label className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Description
+                </label>
+                <input
+                  type="text"
+                  value={formDesc}
+                  onChange={(e) => setFormDesc(e.target.value)}
+                  placeholder="What it does"
+                  className="w-full rounded-md border border-input bg-secondary/50 px-2 py-1.5 text-sm placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+              </div>
+            </div>
+            {formError && <p className="mt-2 text-xs text-destructive">{formError}</p>}
+            <button
+              type="button"
+              onClick={addCustomEntry}
+              className="mt-3 flex h-8 items-center gap-1.5 rounded-md bg-foreground px-3 text-xs font-medium text-background hover:opacity-90"
+            >
+              <Plus className="h-3 w-3" />
+              Add command
+            </button>
+
+            {filteredCustom.length > 0 && (
+              <div className="mt-4 border-t border-border pt-4">
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Saved groups
+                </p>
+                <div className="space-y-2">{filteredCustom.map((s) => renderSection(s))}</div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Favorites Section - only show if favorites exist and not in "favorites only" mode */}
         {isHydrated && favoritesSection && !showOnlyFavorites && (
           <div className="mb-6">
